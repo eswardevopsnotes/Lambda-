@@ -1,1 +1,39 @@
+import boto3
 
+def lambda_handler(event, context):
+    client = boto3.client('rds', region_name='ap-south-1')
+    
+    snapshots = client.describe_db_snapshots(
+        DBInstanceIdentifier='etli-uat-shard-rds-postgres'#RDS NAME
+    )
+    
+    print(snapshots)
+    try:
+        for snapshot in snapshots['DBSnapshots']:
+            expid =  snapshot['DBSnapshotIdentifier'].replace(":", "-" )
+            print(expid)
+            temp = client.describe_export_tasks(
+                    ExportTaskIdentifier = expid
+            )
+                
+            print(temp)
+            if temp['ExportTasks']:
+                if temp['ExportTasks'][0]['ExportTaskIdentifier'] == expid:
+                    print('already exist')
+            else:
+                export_task = client.start_export_task(
+                    ExportTaskIdentifier=expid,
+                    SourceArn=snapshot['DBSnapshotArn'],
+                    S3BucketName='etli-uat-rds-backup',#S3 BUCKET DETAILS WHERE WE NEED TO STORE RDS SNAPSHOTS
+                    IamRoleArn='arn:aws:iam::607426322039:role/ETLI_UAT_RDS_BACKUP_S3',
+                    KmsKeyId='8da26dbd-34a3-4562-b033-3cbf4dfd375d'#Provide S3 kms key id if it is available or remove this line
+                )
+                print(export_task)
+    except Exception as e:
+        print("The error is: ",e)
+        
+
+    return {
+        'statusCode': 200,
+        'body': 'RDS to S3 export started'
+    }
