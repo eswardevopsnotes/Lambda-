@@ -1,0 +1,56 @@
+import boto3
+from datetime import datetime, timedelta, timezone
+
+def lambda_handler(event, context):
+    ec2_client = boto3.client('ec2')
+    rds_client = boto3.client('rds')
+
+    # Get the UTC timezone
+    utc_timezone = timezone.utc
+
+    # Calculate the timestamp for 20 hours ago in UTC
+    twenty_hours_ago = datetime.utcnow() - timedelta(hours=20)
+    twenty_hours_ago = twenty_hours_ago.replace(tzinfo=utc_timezone)
+
+    # Check EC2 instances backup status
+    ec2_instances = ec2_client.describe_instances()
+    for reservation in ec2_instances['Reservations']:
+        for instance in reservation['Instances']:
+            if instance['State']['Name'] == 'running' and instance['RootDeviceType'] == 'ebs':
+                instance_id = instance['InstanceId']
+                instance_name = None
+                
+                # Get the instance name from tags if available
+                for tag in instance.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        instance_name = tag['Value']
+                        break
+                
+                snapshots = ec2_client.describe_snapshots(Filters=[
+                    {'Name': 'volume-id', 'Values': [instance['BlockDeviceMappings'][0]['Ebs']['VolumeId']]}
+                ])
+                
+                # Check if snapshots were created in the last 20 hours
+                recent_snapshots = [snapshot for snapshot in snapshots['Snapshots'] if snapshot['StartTime'] >= twenty_hours_ago]
+                
+                if not recent_snapshots:
+                    # Send notification or log the instance without recent backups
+                    print(f"EC2 Instance Name: {instance_name}, ID: {instance_id} is not backed up in the last 20 hours!")
+
+    # Check RDS instances backup status
+    rds_instances = rds_client.describe_db_instances()
+    for db_instance in rds_instances['DBInstances']:
+        instance_id = db_instance['DBInstanceIdentifier']
+        instance_name = db_instance.get('DBInstanceIdentifier')  # RDS does not have tags for naming
+        
+        if db_instance['BackupRetentionPeriod'] == 0:
+            # Send notification or log the instance without backup retention
+            print(f"RDS Instance Name: {instance_name}, ID: {instance_id} does not have backup retention enabled!")
+        elif not db_instance['LatestRestorableTime'] or db_instance['LatestRestorableTime'] < twenty_hours_ago:
+            # Send notification or log the instance without recent backups
+            print(f"RDS Instance Name: {instance_name}, ID: {instance_id} is not backed up in the last 20 hours!")
+
+    return {
+        'statusCode': 200,
+        'body': 'Backup check completed!'
+    }
